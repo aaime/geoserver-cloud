@@ -1,0 +1,29 @@
+# (c) 2026 Open Source Geospatial Foundation - all rights reserved
+# This code is licensed under the GPL 2.0 license, available at the root
+# application directory.
+
+# What every route does around proxy_pass: the base path removed from the path sent to the service, the
+# X-Forwarded-* headers, the timeouts, and the security and CORS headers of the gateway.
+rewrite ^${GEOSERVER_BASE_PATH}(/.*)$ $1 break;
+proxy_http_version 1.1;
+proxy_set_header Connection "";
+proxy_set_header Host $http_host;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_set_header X-Forwarded-Host $http_host;
+proxy_set_header X-Forwarded-Port $server_port;
+proxy_set_header X-Forwarded-Prefix "${GEOSERVER_BASE_PATH}";
+proxy_set_header X-Request-ID $request_id;
+proxy_buffering off;
+proxy_connect_timeout 5s;
+proxy_read_timeout 300s;
+# the Access-Control-Allow-Origin of the gateway replaces the one of a service
+proxy_hide_header Access-Control-Allow-Origin;
+add_header Access-Control-Allow-Origin $cors_origin always;
+add_header X-Frame-Options SAMEORIGIN always;
+add_header Referrer-Policy same-origin always;
+add_header Strict-Transport-Security max-age=631138519 always;
+add_header X-Content-Type-Options nosniff always;
+add_header X-Xss-Protection 0 always;
+add_header X-Download-Options noopen always;
+add_header X-Permitted-Cross-Domain-Policies none always;

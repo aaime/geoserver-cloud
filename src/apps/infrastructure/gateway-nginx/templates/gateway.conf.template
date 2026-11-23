@@ -1,0 +1,124 @@
+# (c) 2026 Open Source Geospatial Foundation - all rights reserved
+# This code is licensed under the GPL 2.0 license, available at the root
+# application directory.
+
+# The routes of the GeoServer Cloud gateway (gateway.yml of geoserver-cloud-config), with the static service names
+# of its standalone profile. All eight names must resolve when nginx starts.
+
+js_import auth from /etc/nginx/njs/shared-auth.js;
+js_import ows from /etc/nginx/njs/ows-body.js;
+js_set $gsc_user auth.user;
+js_set $gsc_roles auth.roles;
+
+gzip on;
+gzip_min_length 2048;
+gzip_types text/plain text/xml text/css text/javascript application/xml application/json application/geo+json
+           application/gml+xml application/vnd.ogc.wms_xml application/vnd.ogc.se_xml;
+client_max_body_size 0;
+absolute_redirect off;
+
+# idle connections are closed after 30 s, before the 60 s after which a service closes them on its side
+upstream acl        { server acl:8080;        keepalive 32;  keepalive_timeout 30s; }
+upstream wfs        { server wfs:8080;        keepalive 128; keepalive_timeout 30s; }
+upstream wms        { server wms:8080;        keepalive 128; keepalive_timeout 30s; }
+upstream wcs        { server wcs:8080;        keepalive 128; keepalive_timeout 30s; }
+upstream wps        { server wps:8080;        keepalive 32;  keepalive_timeout 30s; }
+upstream restconfig { server restconfig:8080; keepalive 32;  keepalive_timeout 30s; }
+upstream gwc        { server gwc:8080;        keepalive 128; keepalive_timeout 30s; }
+upstream webui      { server webui:8080;      keepalive 32;  keepalive_timeout 30s; }
+
+# /ows goes to the service named by the service parameter, in any letter case, and to the web interface when the
+# parameter names another one. Without the parameter, a POST goes to the service its body names (njs/ows-body.js)
+# and any other method to the web interface
+map $arg_service $ows { "" $ows_without_parameter; default webui; ~*^wms$ wms; ~*^wfs$ wfs; ~*^wcs$ wcs; ~*^wps$ wps; }
+map $request_method $ows_without_parameter { default webui; POST body; }
+map $http_origin $cors_origin { default ""; ~. "*"; }
+
+server {
+  listen ${GATEWAY_PORT} reuseport;
+
+  location ~ "^(${GEOSERVER_BASE_PATH}/?|/)$" { return 302 ${GEOSERVER_BASE_PATH}/web/; }
+  location / { return 404; }
+
+  # a POST to /ows without a service parameter: ows.route reads the service from the body and passes the request
+  # on to /@service/<service><original path>. A body that names no service, or one with no route here, gets an
+  # exception report
+  location ^~ /@body/ { internal; client_body_buffer_size 64k; js_content ows.route; }
+  location ~ "^/@service/(?<ows_service>wfs|wms|wcs|wps)/" {
+    internal;
+    rewrite "^/@service/[a-z]+${GEOSERVER_BASE_PATH}(/.*)$" $1 break;
+    include /etc/nginx/conf.d/include/proxy.conf;
+    include /etc/nginx/conf.d/include/shared-auth.conf;
+    proxy_pass http://$ows_service;
+  }
+  location ~ "^/@service/none/" {
+    internal;
+    default_type application/xml;
+    return 400 '<?xml version="1.0" encoding="UTF-8"?><ows:ExceptionReport xmlns:ows="http://www.opengis.net/ows/1.1" version="1.1.0"><ows:Exception exceptionCode="MissingParameterValue" locator="service"><ows:ExceptionText>The request names no service, in the query string or in the body</ows:ExceptionText></ows:Exception></ows:ExceptionReport>';
+  }
+  location ~ "^/@service/" {
+    internal;
+    default_type application/xml;
+    return 400 '<?xml version="1.0" encoding="UTF-8"?><ows:ExceptionReport xmlns:ows="http://www.opengis.net/ows/1.1" version="1.1.0"><ows:Exception exceptionCode="InvalidParameterValue" locator="service"><ows:ExceptionText>The request body names a service that is not available here</ows:ExceptionText></ows:Exception></ows:ExceptionReport>';
+  }
+
+  location ~ "^${GEOSERVER_BASE_PATH}/acl(/|$)" {
+    include /etc/nginx/conf.d/include/proxy.conf;
+    # no shared authentication on this route: the two headers are dropped, whoever set them
+    proxy_set_header x-gsc-username "";
+    proxy_set_header x-gsc-roles "";
+    proxy_pass http://acl;
+  }
+  location ~ "^${GEOSERVER_BASE_PATH}((/[^/]+){0,2}/wfs$|/(schemas|webresources)/wfs(/|$))" {
+    include /etc/nginx/conf.d/include/proxy.conf;
+    include /etc/nginx/conf.d/include/shared-auth.conf;
+    proxy_pass http://wfs;
+  }
+  location ~ "^${GEOSERVER_BASE_PATH}((/[^/]+){0,2}/ogc/features(/|$)|/(webresources/ogcapi|apicss|swagger-ui)(/|$))" {
+    include /etc/nginx/conf.d/include/proxy.conf;
+    include /etc/nginx/conf.d/include/shared-auth.conf;
+    proxy_pass http://wfs;
+  }
+  location ~ "^${GEOSERVER_BASE_PATH}((/[^/]+){0,2}/wms$|/(schemas|webresources)/wms(/|$)|/openlayers(3|10)?(/|$)|/options\.png$)" {
+    include /etc/nginx/conf.d/include/proxy.conf;
+    include /etc/nginx/conf.d/include/shared-auth.conf;
+    proxy_pass http://wms;
+  }
+  location ~ "^${GEOSERVER_BASE_PATH}((/[^/]+)?/wms/kml$|/kml/icon(/|$))" {
+    include /etc/nginx/conf.d/include/proxy.conf;
+    include /etc/nginx/conf.d/include/shared-auth.conf;
+    proxy_pass http://wms;
+  }
+  location ~ "^${GEOSERVER_BASE_PATH}((/[^/]+){0,2}/wcs$|/schemas/wcs(/|$))" {
+    include /etc/nginx/conf.d/include/proxy.conf;
+    include /etc/nginx/conf.d/include/shared-auth.conf;
+    proxy_pass http://wcs;
+  }
+  location ~ "^${GEOSERVER_BASE_PATH}((/[^/]+)?/wps$|/schemas/wps(/|$))" {
+    include /etc/nginx/conf.d/include/proxy.conf;
+    include /etc/nginx/conf.d/include/shared-auth.conf;
+    proxy_pass http://wps;
+  }
+  # before /ows, so that a path such as /rest/workspaces/ows stays with its service
+  location ~ "^${GEOSERVER_BASE_PATH}/rest(/|$)" {
+    include /etc/nginx/conf.d/include/proxy.conf;
+    include /etc/nginx/conf.d/include/shared-auth.conf;
+    proxy_pass http://restconfig;
+  }
+  location ~ "^${GEOSERVER_BASE_PATH}(/[^/]+){0,2}/gwc(/|$)" {
+    include /etc/nginx/conf.d/include/proxy.conf;
+    include /etc/nginx/conf.d/include/shared-auth.conf;
+    proxy_pass http://gwc;
+  }
+  location ~ "^${GEOSERVER_BASE_PATH}(/[^/]+){0,2}/ows$" {
+    if ($ows = body) { rewrite ^ /@body$uri last; }
+    include /etc/nginx/conf.d/include/proxy.conf;
+    include /etc/nginx/conf.d/include/shared-auth.conf;
+    proxy_pass http://$ows;
+  }
+  location ~ "^${GEOSERVER_BASE_PATH}/" {
+    include /etc/nginx/conf.d/include/proxy.conf;
+    include /etc/nginx/conf.d/include/shared-auth.conf;
+    proxy_pass http://webui;
+  }
+}

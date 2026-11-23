@@ -1,0 +1,10 @@
+# (c) 2026 Open Source Geospatial Foundation - all rights reserved
+# This code is licensed under the GPL 2.0 license, available at the root
+# application directory.
+
+# Shared authentication. The user and roles of the signed cookie go to the service and replace whatever the client
+# sent in these headers; an empty value sends no header. The login and logout answers of the web interface become
+# the cookie.
+proxy_set_header x-gsc-username $gsc_user;
+proxy_set_header x-gsc-roles $gsc_roles;
+js_header_filter auth.answer;
